@@ -1,10 +1,12 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  dpapi,
+  dpapiFile,
   isKeychainAvailable,
   keychainLoad,
   keychainSave,
@@ -35,7 +37,7 @@ describe("keychain (unit)", () => {
   });
 
   it("keychainSave returns false when keychain unavailable", async () => {
-    if (process.platform === "darwin") return; // skip on macOS where keychain IS available
+    if (await isKeychainAvailable()) return; // only where no keychain backend exists
     const result = await keychainSave("https://test.example.com", "{}");
     assert.equal(result, false);
   });
@@ -86,6 +88,40 @@ describe("securityAddCommand", () => {
       } catch {
         // already gone
       }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dpapi (Windows)", () => {
+  it("names one file per account under the given folder", () => {
+    assert.equal(
+      dpapiFile("https://a.example.com", join("x", "kc")),
+      join("x", "kc", "passwd.team-https%3A%2F%2Fa.example.com.dpapi"),
+    );
+  });
+
+  it("round-trips a value and keeps only the encrypted blob on disk", {
+    skip: process.platform !== "win32",
+  }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "passwd-dpapi-"));
+    const file = dpapiFile("acct one", dir);
+    try {
+      const value = 'v@l "with" \\ quotes $HOME';
+      await dpapi.save(file, value);
+      assert.ok(existsSync(file));
+      assert.ok(!readFileSync(file, "utf-8").includes(value));
+      assert.equal(await dpapi.load(file), value);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when the account has no file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "passwd-dpapi-"));
+    try {
+      assert.equal(await dpapi.load(dpapiFile("missing", dir)), null);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
